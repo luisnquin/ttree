@@ -43,11 +43,7 @@
         env = {
           CGO_ENABLED = "1";
         };
-        meta = with pkgs.lib; {
-          description = "Terminal TUI application in Go for managing hierarchical tasks";
-          license = licenses.mit; # Assuming MIT, change if needed
-          maintainers = [];
-        };
+        meta.description = "TUI app for managing hierarchical tasks";
       };
     });
   };
