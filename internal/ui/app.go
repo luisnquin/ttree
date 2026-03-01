@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -180,6 +181,14 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.expanded[m.expandedList[m.cursor].ID] = false
 					m.updateExpandedList()
 				}
+			case "alt+up":
+				m.moveNodeUp()
+			case "alt+down":
+				m.moveNodeDown()
+			case "alt+left":
+				m.moveNodeLeft()
+			case "alt+right":
+				m.moveNodeRight()
 			case "a": // Add child
 				m.insertingChild = true
 				m.insertingSib = false
@@ -207,6 +216,8 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.cursor < len(m.expandedList) {
 					m.state = StateSelectColor
 				}
+			case "y": // Yank node
+				m.yankNode()
 			case " ": // Edit status
 				if m.cursor < len(m.expandedList) {
 					m.state = StateEditStatus
@@ -392,6 +403,10 @@ func (m *UIModel) View() string {
 			title = renderedTitle
 		}
 
+		if node.Context != "" {
+			title += lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(" [...]")
+		}
+
 		if len(node.Children) > 0 {
 			if m.expanded[node.ID] {
 				line += "[-] "
@@ -469,4 +484,203 @@ func (m *UIModel) calculateEffectiveColors(node *model.Node, inheritedColor stri
 	for _, child := range node.Children {
 		m.calculateEffectiveColors(child, colorToPass)
 	}
+}
+
+func (m *UIModel) moveNodeUp() {
+	if m.cursor <= 0 || len(m.expandedList) == 0 {
+		return
+	}
+	node := m.expandedList[m.cursor]
+	siblings := m.getSiblings(node)
+	if len(siblings) <= 1 {
+		return
+	}
+
+	idx := -1
+	for i, s := range siblings {
+		if s.ID == node.ID {
+			idx = i
+			break
+		}
+	}
+
+	if idx > 0 {
+		prev := siblings[idx-1]
+		node.Position, prev.Position = prev.Position, node.Position
+		if node.Position == prev.Position {
+			// fallback if they have same position
+			for i, s := range siblings {
+				s.Position = i
+			}
+			siblings[idx].Position, siblings[idx-1].Position = idx-1, idx
+		}
+		m.db.UpdateNode(context.Background(), node)
+		m.db.UpdateNode(context.Background(), prev)
+		m.loadNodes()
+		// Re-find cursor
+		for i, n := range m.expandedList {
+			if n.ID == node.ID {
+				m.cursor = i
+				break
+			}
+		}
+	}
+}
+
+func (m *UIModel) moveNodeDown() {
+	if m.cursor < 0 || m.cursor >= len(m.expandedList) {
+		return
+	}
+	node := m.expandedList[m.cursor]
+	siblings := m.getSiblings(node)
+	if len(siblings) <= 1 {
+		return
+	}
+
+	idx := -1
+	for i, s := range siblings {
+		if s.ID == node.ID {
+			idx = i
+			break
+		}
+	}
+
+	if idx != -1 && idx < len(siblings)-1 {
+		next := siblings[idx+1]
+		node.Position, next.Position = next.Position, node.Position
+		if node.Position == next.Position {
+			for i, s := range siblings {
+				s.Position = i
+			}
+			siblings[idx].Position, siblings[idx+1].Position = idx+1, idx
+		}
+		m.db.UpdateNode(context.Background(), node)
+		m.db.UpdateNode(context.Background(), next)
+		m.loadNodes()
+		for i, n := range m.expandedList {
+			if n.ID == node.ID {
+				m.cursor = i
+				break
+			}
+		}
+	}
+}
+
+func (m *UIModel) moveNodeLeft() {
+	if m.cursor < 0 || m.cursor >= len(m.expandedList) {
+		return
+	}
+	node := m.expandedList[m.cursor]
+	if node.ParentID == nil {
+		return
+	}
+
+	var parent *model.Node
+	for _, n := range m.nodes {
+		if n.ID == *node.ParentID {
+			parent = n
+			break
+		}
+	}
+
+	if parent != nil {
+		node.ParentID = parent.ParentID
+		node.Position = parent.Position + 1
+		// Shift others
+		ctx := context.Background()
+		for _, n := range m.nodes {
+			if n.ParentID == node.ParentID && n.Position >= node.Position && n.ID != node.ID {
+				n.Position++
+				m.db.UpdateNode(ctx, n)
+			}
+		}
+		m.db.UpdateNode(ctx, node)
+		m.loadNodes()
+		for i, n := range m.expandedList {
+			if n.ID == node.ID {
+				m.cursor = i
+				break
+			}
+		}
+	}
+}
+
+func (m *UIModel) moveNodeRight() {
+	if m.cursor < 0 || m.cursor >= len(m.expandedList) {
+		return
+	}
+	node := m.expandedList[m.cursor]
+	siblings := m.getSiblings(node)
+
+	idx := -1
+	for i, s := range siblings {
+		if s.ID == node.ID {
+			idx = i
+			break
+		}
+	}
+
+	if idx > 0 {
+		newParent := siblings[idx-1]
+		node.ParentID = &newParent.ID
+		node.Position = len(newParent.Children)
+		m.expanded[newParent.ID] = true
+		m.db.UpdateNode(context.Background(), node)
+		m.loadNodes()
+		for i, n := range m.expandedList {
+			if n.ID == node.ID {
+				m.cursor = i
+				break
+			}
+		}
+	} else if idx == 0 && len(siblings) > 1 {
+		// Indent into the sibling below
+		newParent := siblings[1]
+		node.ParentID = &newParent.ID
+		node.Position = 0 // first child
+		m.expanded[newParent.ID] = true
+		m.db.UpdateNode(context.Background(), node)
+		m.loadNodes()
+		for i, n := range m.expandedList {
+			if n.ID == node.ID {
+				m.cursor = i
+				break
+			}
+		}
+	}
+}
+
+func (m *UIModel) yankNode() {
+	if m.cursor < 0 || m.cursor >= len(m.expandedList) {
+		return
+	}
+
+	node := m.expandedList[m.cursor]
+	var b strings.Builder
+	m.formatNodeRecursive(node, 0, &b)
+
+	clipboard.WriteAll(b.String())
+}
+
+func (m *UIModel) formatNodeRecursive(n *model.Node, level int, b *strings.Builder) {
+	indent := strings.Repeat("  ", level)
+	b.WriteString(fmt.Sprintf("%s- %s", indent, n.Title))
+	if n.Status != "" {
+		b.WriteString(fmt.Sprintf(" [%s]", n.Status))
+	}
+	b.WriteString("\n")
+
+	for _, child := range n.Children {
+		m.formatNodeRecursive(child, level+1, b)
+	}
+}
+
+func (m *UIModel) getSiblings(node *model.Node) []*model.Node {
+	var siblings []*model.Node
+	for _, n := range m.nodes {
+		if (node.ParentID == nil && n.ParentID == nil) || (node.ParentID != nil && n.ParentID != nil && *node.ParentID == *n.ParentID) {
+			siblings = append(siblings, n)
+		}
+	}
+	return siblings
 }
