@@ -47,6 +47,7 @@ const (
 	StateEditStatus
 	StateEditContext
 	StateSelectColor
+	StateConfirmDelete
 )
 
 type UIModel struct {
@@ -222,10 +223,19 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "x": // Delete node
 				if m.cursor < len(m.expandedList) {
-					id := m.expandedList[m.cursor].ID
-					m.db.DeleteNode(context.Background(), id)
-					m.loadNodes()
+					m.state = StateConfirmDelete
 				}
+			}
+
+		case StateConfirmDelete:
+			switch msg.String() {
+			case "y", "enter":
+				m.state = StateNormal
+				id := m.expandedList[m.cursor].ID
+				m.db.DeleteNode(context.Background(), id)
+				m.loadNodes()
+			case "n", "esc":
+				m.state = StateNormal
 			}
 
 		case StateEditTitle:
@@ -413,6 +423,8 @@ func (m *UIModel) View() string {
 	} else if m.state == StateEditContext {
 		b.WriteString("\n" + contextPanelStyle.Render(m.contextArea.View()) + "\n")
 		b.WriteString("(Press ESC to save and close context)\n")
+	} else if m.state == StateConfirmDelete {
+		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true).Render("Delete this node and all its children? (y/n)") + "\n")
 	} else if len(m.expandedList) == 0 {
 		b.WriteString("No tasks yet. Press 'a' to add one.\n")
 		if m.state == StateEditTitle {
