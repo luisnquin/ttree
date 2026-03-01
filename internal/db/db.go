@@ -42,16 +42,24 @@ func (db *DB) InitSchema(ctx context.Context) error {
 		status TEXT,
 		context TEXT,
 		position INTEGER NOT NULL,
+		color TEXT DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY(parent_id) REFERENCES nodes(id) ON DELETE CASCADE
 	);
 	`
 	_, err := db.ExecContext(ctx, query)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Simple migration if table exists without color column
+	db.ExecContext(ctx, "ALTER TABLE nodes ADD COLUMN color TEXT DEFAULT ''")
+
+	return nil
 }
 
 func (db *DB) GetNodes(ctx context.Context) ([]*model.Node, error) {
-	query := `SELECT id, parent_id, title, status, context, position, created_at FROM nodes ORDER BY position ASC, created_at ASC`
+	query := `SELECT id, parent_id, title, status, context, position, color, created_at FROM nodes ORDER BY position ASC, created_at ASC`
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -61,7 +69,7 @@ func (db *DB) GetNodes(ctx context.Context) ([]*model.Node, error) {
 	var nodes []*model.Node
 	for rows.Next() {
 		var n model.Node
-		if err := rows.Scan(&n.ID, &n.ParentID, &n.Title, &n.Status, &n.Context, &n.Position, &n.CreatedAt); err != nil {
+		if err := rows.Scan(&n.ID, &n.ParentID, &n.Title, &n.Status, &n.Context, &n.Position, &n.Color, &n.CreatedAt); err != nil {
 			return nil, err
 		}
 		nodes = append(nodes, &n)
@@ -70,14 +78,14 @@ func (db *DB) GetNodes(ctx context.Context) ([]*model.Node, error) {
 }
 
 func (db *DB) CreateNode(ctx context.Context, n *model.Node) error {
-	query := `INSERT INTO nodes (id, parent_id, title, status, context, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
-	_, err := db.ExecContext(ctx, query, n.ID, n.ParentID, n.Title, n.Status, n.Context, n.Position, n.CreatedAt)
+	query := `INSERT INTO nodes (id, parent_id, title, status, context, position, color, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err := db.ExecContext(ctx, query, n.ID, n.ParentID, n.Title, n.Status, n.Context, n.Position, n.Color, n.CreatedAt)
 	return err
 }
 
 func (db *DB) UpdateNode(ctx context.Context, n *model.Node) error {
-	query := `UPDATE nodes SET parent_id=?, title=?, status=?, context=?, position=? WHERE id=?`
-	_, err := db.ExecContext(ctx, query, n.ParentID, n.Title, n.Status, n.Context, n.Position, n.ID)
+	query := `UPDATE nodes SET parent_id=?, title=?, status=?, context=?, position=?, color=? WHERE id=?`
+	_, err := db.ExecContext(ctx, query, n.ParentID, n.Title, n.Status, n.Context, n.Position, n.Color, n.ID)
 	return err
 }
 

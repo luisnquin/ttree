@@ -10,6 +10,7 @@ type Node struct {
 	Status    string    `json:"status"`
 	Context   string    `json:"context"`
 	Position  int       `json:"position"`
+	Color     string    `json:"color"`
 	CreatedAt time.Time `json:"created_at"`
 	Children  []*Node   `json:"children,omitempty"`
 }

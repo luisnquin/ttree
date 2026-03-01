@@ -25,6 +25,18 @@ var (
 	defaultStatusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	selectedStyle      = lipgloss.NewStyle().Background(lipgloss.Color("236"))
 	contextPanelStyle  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1, 2).Width(40)
+
+	nodeColorMap = map[string]lipgloss.Style{
+		"1": lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
+		"2": lipgloss.NewStyle().Foreground(lipgloss.Color("10")),
+		"3": lipgloss.NewStyle().Foreground(lipgloss.Color("11")),
+		"4": lipgloss.NewStyle().Foreground(lipgloss.Color("12")),
+		"5": lipgloss.NewStyle().Foreground(lipgloss.Color("13")),
+		"6": lipgloss.NewStyle().Foreground(lipgloss.Color("14")),
+		"7": lipgloss.NewStyle().Foreground(lipgloss.Color("15")),
+		"8": lipgloss.NewStyle().Foreground(lipgloss.Color("208")),
+		"9": lipgloss.NewStyle().Foreground(lipgloss.Color("213")),
+	}
 )
 
 type AppState int
@@ -34,15 +46,17 @@ const (
 	StateEditTitle
 	StateEditStatus
 	StateEditContext
+	StateSelectColor
 )
 
 type UIModel struct {
-	db           *db.DB
-	nodes        []*model.Node
-	roots        []*model.Node
-	expandedList []*model.Node // flat list of currently visible nodes
-	cursor       int
-	expanded     map[string]bool
+	db              *db.DB
+	nodes           []*model.Node
+	roots           []*model.Node
+	expandedList    []*model.Node     // flat list of currently visible nodes
+	effectiveColors map[string]string // map from node ID to its resolved color
+	cursor          int
+	expanded        map[string]bool
 
 	state       AppState
 	titleInput  textinput.Model
@@ -105,6 +119,16 @@ func (m *UIModel) updateExpandedList() error {
 		m.traverse(root, &list)
 	}
 	m.expandedList = list
+
+	// Create map to calculate effective colors
+	// If a node has a color, use it. Otherwise, inherit from parent.
+	m.effectiveColors = make(map[string]string)
+
+	// We iterate through roots, and traverse down to set effective colors
+	for _, root := range m.roots {
+		m.calculateEffectiveColors(root, "")
+	}
+
 	if m.cursor >= len(m.expandedList) {
 		m.cursor = len(m.expandedList) - 1
 		if m.cursor < 0 {
@@ -177,6 +201,10 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.titleInput.SetValue(m.expandedList[m.cursor].Title)
 					m.titleInput.Focus()
 					return m, textinput.Blink
+				}
+			case "c": // Unlock color
+				if m.cursor < len(m.expandedList) {
+					m.state = StateSelectColor
 				}
 			case " ": // Edit status
 				if m.cursor < len(m.expandedList) {
@@ -278,6 +306,22 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.contextArea, cmd = m.contextArea.Update(msg)
 				return m, cmd
 			}
+
+		case StateSelectColor:
+			switch msg.String() {
+			case "esc":
+				m.state = StateNormal
+			case "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
+				m.state = StateNormal
+				node := m.expandedList[m.cursor]
+				if msg.String() == "0" {
+					node.Color = ""
+				} else {
+					node.Color = msg.String()
+				}
+				m.db.UpdateNode(context.Background(), node)
+				m.loadNodes()
+			}
 		}
 	}
 
@@ -291,7 +335,7 @@ func (m *UIModel) View() string {
 
 	var b strings.Builder
 	b.WriteString("ttree (q/ctrl+c to quit, ←/→ to collapse/expand, ↑/↓ to navigate)\n")
-	b.WriteString("a: Child | A: Sibling | e: Title | space: Status | enter: Context | x: Delete\n\n")
+	b.WriteString("a: Child | A: Sibling | e: Title | space: Status | enter: Context | x: Delete | c: Color\n\n")
 
 	// Pre-calculate line prefixes (standard tree drawing logic)
 	// Build map from ID -> prefix string
@@ -312,6 +356,19 @@ func (m *UIModel) View() string {
 
 		// Node title & status
 		title := node.Title
+
+		var renderedTitle string
+		effectiveColor := m.effectiveColors[node.ID]
+		if effectiveColor != "" {
+			if style, ok := nodeColorMap[effectiveColor]; ok {
+				renderedTitle = style.Bold(true).Render(title)
+			} else {
+				renderedTitle = titleStyle.Render(title)
+			}
+		} else {
+			renderedTitle = titleStyle.Render(title)
+		}
+
 		status := node.Status
 		if status != "" {
 			var stLip lipgloss.Style
@@ -320,9 +377,9 @@ func (m *UIModel) View() string {
 			} else {
 				stLip = defaultStatusStyle
 			}
-			title = fmt.Sprintf("%s | %s", titleStyle.Render(title), stLip.Render(status))
+			title = fmt.Sprintf("%s | %s", renderedTitle, stLip.Render(status))
 		} else {
-			title = titleStyle.Render(title)
+			title = renderedTitle
 		}
 
 		if len(node.Children) > 0 {
@@ -387,5 +444,17 @@ func (m *UIModel) buildPrefixes(node *model.Node, prefix string, isLast bool, ac
 			childPrefix += "├── "
 		}
 		m.buildPrefixes(child, childPrefix, isChildLast, acc)
+	}
+}
+
+func (m *UIModel) calculateEffectiveColors(node *model.Node, inheritedColor string) {
+	colorToPass := inheritedColor
+	if node.Color != "" {
+		colorToPass = node.Color
+	}
+	m.effectiveColors[node.ID] = colorToPass
+
+	for _, child := range node.Children {
+		m.calculateEffectiveColors(child, colorToPass)
 	}
 }
