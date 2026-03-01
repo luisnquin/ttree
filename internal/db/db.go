@@ -14,12 +14,26 @@ type DB struct {
 	*sql.DB
 }
 
-func Open() (*DB, error) {
+func getDataDir() (string, error) {
+	if xdgDataHome := os.Getenv("XDG_DATA_HOME"); xdgDataHome != "" {
+		return filepath.Join(xdgDataHome, "ttree"), nil
+	}
 	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".local", "share", "ttree"), nil
+}
+
+func Open() (*DB, error) {
+	dataDir, err := getDataDir()
 	if err != nil {
 		return nil, err
 	}
-	dbPath := filepath.Join(home, ".ttree.db")
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return nil, err
+	}
+	dbPath := filepath.Join(dataDir, "ttree.db")
 
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
