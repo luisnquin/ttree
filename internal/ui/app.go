@@ -404,7 +404,7 @@ func (m *UIModel) View() string {
 		}
 
 		if node.Context != "" {
-			title += lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(" [...]")
+			title += lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(" *")
 		}
 
 		if len(node.Children) > 0 {
