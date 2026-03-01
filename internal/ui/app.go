@@ -181,13 +181,13 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.expanded[m.expandedList[m.cursor].ID] = false
 					m.updateExpandedList()
 				}
-			case "alt+up":
+			case "alt+up", "meta+up":
 				m.moveNodeUp()
-			case "alt+down":
+			case "alt+down", "meta+down":
 				m.moveNodeDown()
-			case "alt+left":
+			case "alt+left", "meta+left":
 				m.moveNodeLeft()
-			case "alt+right":
+			case "alt+right", "meta+right":
 				m.moveNodeRight()
 			case "a": // Add child
 				m.insertingChild = true
@@ -475,14 +475,14 @@ func (m *UIModel) buildPrefixes(node *model.Node, prefix string, isLast bool, ac
 }
 
 func (m *UIModel) calculateEffectiveColors(node *model.Node, inheritedColor string) {
-	colorToPass := inheritedColor
 	if node.Color != "" {
-		colorToPass = node.Color
+		m.effectiveColors[node.ID] = node.Color
+	} else {
+		m.effectiveColors[node.ID] = inheritedColor
 	}
-	m.effectiveColors[node.ID] = colorToPass
 
 	for _, child := range node.Children {
-		m.calculateEffectiveColors(child, colorToPass)
+		m.calculateEffectiveColors(child, m.effectiveColors[node.ID])
 	}
 }
 
@@ -506,6 +506,7 @@ func (m *UIModel) moveNodeUp() {
 
 	if idx > 0 {
 		prev := siblings[idx-1]
+		node.Color = m.effectiveColors[node.ID] // Freeze color
 		node.Position, prev.Position = prev.Position, node.Position
 		if node.Position == prev.Position {
 			// fallback if they have same position
@@ -547,6 +548,7 @@ func (m *UIModel) moveNodeDown() {
 
 	if idx != -1 && idx < len(siblings)-1 {
 		next := siblings[idx+1]
+		node.Color = m.effectiveColors[node.ID] // Freeze color
 		node.Position, next.Position = next.Position, node.Position
 		if node.Position == next.Position {
 			for i, s := range siblings {
@@ -584,6 +586,7 @@ func (m *UIModel) moveNodeLeft() {
 	}
 
 	if parent != nil {
+		node.Color = m.effectiveColors[node.ID] // Freeze color
 		node.ParentID = parent.ParentID
 		node.Position = parent.Position + 1
 		// Shift others
@@ -622,6 +625,7 @@ func (m *UIModel) moveNodeRight() {
 
 	if idx > 0 {
 		newParent := siblings[idx-1]
+		node.Color = m.effectiveColors[node.ID] // Freeze color
 		node.ParentID = &newParent.ID
 		node.Position = len(newParent.Children)
 		m.expanded[newParent.ID] = true
@@ -636,6 +640,7 @@ func (m *UIModel) moveNodeRight() {
 	} else if idx == 0 && len(siblings) > 1 {
 		// Indent into the sibling below
 		newParent := siblings[1]
+		node.Color = m.effectiveColors[node.ID] // Freeze color
 		node.ParentID = &newParent.ID
 		node.Position = 0 // first child
 		m.expanded[newParent.ID] = true
