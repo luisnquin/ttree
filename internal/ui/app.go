@@ -68,6 +68,7 @@ type UIModel struct {
 	insertingChild bool
 	insertingSib   bool
 	err            error
+	undoManager    *UndoManager
 }
 
 func New(dbInst *db.DB) (*UIModel, error) {
@@ -87,6 +88,7 @@ func New(dbInst *db.DB) (*UIModel, error) {
 		titleInput:  ti,
 		statusInput: si,
 		contextArea: ta,
+		undoManager: NewUndoManager(),
 	}
 
 	if err := m.loadNodes(); err != nil {
@@ -236,14 +238,29 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.cursor < len(m.expandedList) {
 					m.state = StateConfirmDelete
 				}
+			case "ctrl+z":
+				m.undoManager.Undo()
+				m.loadNodes()
+			case "ctrl+y":
+				m.undoManager.Redo()
+				m.loadNodes()
 			}
 
 		case StateConfirmDelete:
 			switch msg.String() {
 			case "y", "enter":
 				m.state = StateNormal
-				id := m.expandedList[m.cursor].ID
-				m.db.DeleteNode(context.Background(), id)
+				node := m.expandedList[m.cursor]
+
+				// Get entire subtree for reversible deletion
+				var subtree []*model.Node
+				m.collectSubtree(node, &subtree)
+
+				cmd := &DeleteNodeCommand{
+					db:    m.db,
+					nodes: subtree,
+				}
+				m.undoManager.Execute(cmd)
 				m.loadNodes()
 			case "n", "esc":
 				m.state = StateNormal
@@ -268,20 +285,25 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 
 						pos := 0 // append logic
-						id := uuid.New().String()
 						newNode := &model.Node{
-							ID:        id,
+							ID:        uuid.New().String(),
 							ParentID:  parentID,
 							Title:     title,
 							Position:  pos,
 							CreatedAt: time.Now(),
 						}
-						m.db.CreateNode(context.Background(), newNode)
+						m.undoManager.Execute(&CreateNodeCommand{db: m.db, node: newNode})
 					} else {
 						// updating existing
-						node := m.expandedList[m.cursor]
-						node.Title = title
-						m.db.UpdateNode(context.Background(), node)
+						oldNode := *m.expandedList[m.cursor]
+						newNode := *m.expandedList[m.cursor]
+						newNode.Title = title
+
+						m.undoManager.Execute(&UpdateNodeCommand{
+							db:  m.db,
+							old: &oldNode,
+							new: &newNode,
+						})
 					}
 				}
 				m.insertingChild = false
@@ -302,9 +324,15 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				m.state = StateNormal
 				m.statusInput.Blur()
-				node := m.expandedList[m.cursor]
-				node.Status = m.statusInput.Value()
-				m.db.UpdateNode(context.Background(), node)
+				oldNode := *m.expandedList[m.cursor]
+				newNode := *m.expandedList[m.cursor]
+				newNode.Status = m.statusInput.Value()
+
+				m.undoManager.Execute(&UpdateNodeCommand{
+					db:  m.db,
+					old: &oldNode,
+					new: &newNode,
+				})
 				m.loadNodes()
 			case "esc":
 				m.state = StateNormal
@@ -319,9 +347,15 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc":
 				m.state = StateNormal
 				m.contextArea.Blur()
-				node := m.expandedList[m.cursor]
-				node.Context = m.contextArea.Value()
-				m.db.UpdateNode(context.Background(), node)
+				oldNode := *m.expandedList[m.cursor]
+				newNode := *m.expandedList[m.cursor]
+				newNode.Context = m.contextArea.Value()
+
+				m.undoManager.Execute(&UpdateNodeCommand{
+					db:  m.db,
+					old: &oldNode,
+					new: &newNode,
+				})
 				m.loadNodes()
 			default:
 				m.contextArea, cmd = m.contextArea.Update(msg)
@@ -334,13 +368,18 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = StateNormal
 			case "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
 				m.state = StateNormal
-				node := m.expandedList[m.cursor]
+				oldNode := *m.expandedList[m.cursor]
+				newNode := *m.expandedList[m.cursor]
 				if msg.String() == "0" {
-					node.Color = ""
+					newNode.Color = ""
 				} else {
-					node.Color = msg.String()
+					newNode.Color = msg.String()
 				}
-				m.db.UpdateNode(context.Background(), node)
+				m.undoManager.Execute(&UpdateNodeCommand{
+					db:  m.db,
+					old: &oldNode,
+					new: &newNode,
+				})
 				m.loadNodes()
 			}
 		}
@@ -486,6 +525,13 @@ func (m *UIModel) calculateEffectiveColors(node *model.Node, inheritedColor stri
 	}
 }
 
+func (m *UIModel) collectSubtree(node *model.Node, subtree *[]*model.Node) {
+	*subtree = append(*subtree, node)
+	for _, child := range node.Children {
+		m.collectSubtree(child, subtree)
+	}
+}
+
 func (m *UIModel) moveNodeUp() {
 	if m.cursor <= 0 || len(m.expandedList) == 0 {
 		return
@@ -506,17 +552,28 @@ func (m *UIModel) moveNodeUp() {
 
 	if idx > 0 {
 		prev := siblings[idx-1]
-		node.Color = m.effectiveColors[node.ID] // Freeze color
-		node.Position, prev.Position = prev.Position, node.Position
-		if node.Position == prev.Position {
+
+		oldNode := *node
+		oldPrev := *prev
+
+		newNode := *node
+		newPrev := *prev
+
+		newNode.Color = m.effectiveColors[node.ID] // Freeze color
+		newNode.Position, newPrev.Position = prev.Position, node.Position
+		if newNode.Position == newPrev.Position {
 			// fallback if they have same position
-			for i, s := range siblings {
-				s.Position = i
-			}
-			siblings[idx].Position, siblings[idx-1].Position = idx-1, idx
+			newNode.Position, newPrev.Position = idx-1, idx
 		}
-		m.db.UpdateNode(context.Background(), node)
-		m.db.UpdateNode(context.Background(), prev)
+
+		cmd := &CompositeCommand{
+			cmds: []Command{
+				&UpdateNodeCommand{db: m.db, old: &oldNode, new: &newNode},
+				&UpdateNodeCommand{db: m.db, old: &oldPrev, new: &newPrev},
+			},
+		}
+
+		m.undoManager.Execute(cmd)
 		m.loadNodes()
 		// Re-find cursor
 		for i, n := range m.expandedList {
@@ -548,16 +605,27 @@ func (m *UIModel) moveNodeDown() {
 
 	if idx != -1 && idx < len(siblings)-1 {
 		next := siblings[idx+1]
-		node.Color = m.effectiveColors[node.ID] // Freeze color
-		node.Position, next.Position = next.Position, node.Position
-		if node.Position == next.Position {
-			for i, s := range siblings {
-				s.Position = i
-			}
-			siblings[idx].Position, siblings[idx+1].Position = idx+1, idx
+
+		oldNode := *node
+		oldNext := *next
+
+		newNode := *node
+		newNext := *next
+
+		newNode.Color = m.effectiveColors[node.ID] // Freeze color
+		newNode.Position, newNext.Position = next.Position, node.Position
+		if newNode.Position == newNext.Position {
+			newNode.Position, newNext.Position = idx+1, idx
 		}
-		m.db.UpdateNode(context.Background(), node)
-		m.db.UpdateNode(context.Background(), next)
+
+		cmd := &CompositeCommand{
+			cmds: []Command{
+				&UpdateNodeCommand{db: m.db, old: &oldNode, new: &newNode},
+				&UpdateNodeCommand{db: m.db, old: &oldNext, new: &newNext},
+			},
+		}
+
+		m.undoManager.Execute(cmd)
 		m.loadNodes()
 		for i, n := range m.expandedList {
 			if n.ID == node.ID {
@@ -586,18 +654,27 @@ func (m *UIModel) moveNodeLeft() {
 	}
 
 	if parent != nil {
-		node.Color = m.effectiveColors[node.ID] // Freeze color
-		node.ParentID = parent.ParentID
-		node.Position = parent.Position + 1
+		cmds := make([]Command, 0)
+
+		oldNode := *node
+		newNode := *node
+		newNode.Color = m.effectiveColors[node.ID] // Freeze color
+		newNode.ParentID = parent.ParentID
+		newNode.Position = parent.Position + 1
+
+		cmds = append(cmds, &UpdateNodeCommand{db: m.db, old: &oldNode, new: &newNode})
+
 		// Shift others
-		ctx := context.Background()
 		for _, n := range m.nodes {
-			if n.ParentID == node.ParentID && n.Position >= node.Position && n.ID != node.ID {
-				n.Position++
-				m.db.UpdateNode(ctx, n)
+			if n.ParentID == newNode.ParentID && n.Position >= newNode.Position && n.ID != node.ID {
+				oldN := *n
+				newN := *n
+				newN.Position++
+				cmds = append(cmds, &UpdateNodeCommand{db: m.db, old: &oldN, new: &newN})
 			}
 		}
-		m.db.UpdateNode(ctx, node)
+
+		m.undoManager.Execute(&CompositeCommand{cmds: cmds})
 		m.loadNodes()
 		for i, n := range m.expandedList {
 			if n.ID == node.ID {
@@ -625,11 +702,13 @@ func (m *UIModel) moveNodeRight() {
 
 	if idx > 0 {
 		newParent := siblings[idx-1]
-		node.Color = m.effectiveColors[node.ID] // Freeze color
-		node.ParentID = &newParent.ID
-		node.Position = len(newParent.Children)
+		oldNode := *node
+		newNode := *node
+		newNode.Color = m.effectiveColors[node.ID] // Freeze color
+		newNode.ParentID = &newParent.ID
+		newNode.Position = len(newParent.Children)
 		m.expanded[newParent.ID] = true
-		m.db.UpdateNode(context.Background(), node)
+		m.undoManager.Execute(&UpdateNodeCommand{db: m.db, old: &oldNode, new: &newNode})
 		m.loadNodes()
 		for i, n := range m.expandedList {
 			if n.ID == node.ID {
@@ -640,11 +719,13 @@ func (m *UIModel) moveNodeRight() {
 	} else if idx == 0 && len(siblings) > 1 {
 		// Indent into the sibling below
 		newParent := siblings[1]
-		node.Color = m.effectiveColors[node.ID] // Freeze color
-		node.ParentID = &newParent.ID
-		node.Position = 0 // first child
+		oldNode := *node
+		newNode := *node
+		newNode.Color = m.effectiveColors[node.ID] // Freeze color
+		newNode.ParentID = &newParent.ID
+		newNode.Position = 0 // first child
 		m.expanded[newParent.ID] = true
-		m.db.UpdateNode(context.Background(), node)
+		m.undoManager.Execute(&UpdateNodeCommand{db: m.db, old: &oldNode, new: &newNode})
 		m.loadNodes()
 		for i, n := range m.expandedList {
 			if n.ID == node.ID {
