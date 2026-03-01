@@ -1,9 +1,5 @@
 {
-  description = "A Nix-flake-based Go development environment for ttree";
-
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  };
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   outputs = {
     self,
@@ -16,6 +12,10 @@
           pkgs = import nixpkgs {inherit system;};
         });
   in {
+    overlays.default = final: prev: {
+      ttree = self.packages.${prev.system}.default;
+    };
+
     devShells = forEachSupportedSystem ({pkgs}: {
       default = pkgs.mkShell {
         packages = with pkgs; [
