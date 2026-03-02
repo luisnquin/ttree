@@ -24,7 +24,7 @@ var (
 		"blocked": lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
 	}
 	defaultStatusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	selectedStyle      = lipgloss.NewStyle().Background(lipgloss.Color("236"))
+	selectedStyle      = lipgloss.NewStyle().Background(lipgloss.Color("239")).Foreground(lipgloss.Color("15")).Bold(true)
 	contextPanelStyle  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1, 2).Width(40)
 
 	nodeColorMap = map[string]lipgloss.Style{
