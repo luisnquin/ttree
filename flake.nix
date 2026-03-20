@@ -13,7 +13,7 @@
         });
   in {
     overlays.default = final: prev: {
-      ttree = self.packages.${prev.system}.default;
+      ttree = self.packages.${final.system}.default;
     };
 
     devShells = forEachSupportedSystem ({pkgs}: {
